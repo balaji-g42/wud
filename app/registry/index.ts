@@ -1,9 +1,6 @@
 /**
  * Registry handling all components (registries, triggers, watchers).
  */
-import capitalize from 'capitalize';
-import fs from 'fs';
-import path from 'path';
 import logger from '../log';
 const log = logger.child({ component: 'registry' });
 import {
@@ -17,6 +14,52 @@ import Trigger from '../triggers/providers/Trigger';
 import Watcher from '../watchers/Watcher';
 import Registry from '../registries/Registry';
 import Authentication from '../authentications/providers/Authentication';
+
+// Static provider map — avoids dynamic import() path resolution issues
+const PROVIDERS: Record<string, Record<string, () => Promise<any>>> = {
+    authentication: {
+        anonymous: () => import('../authentications/providers/anonymous/Anonymous'),
+        basic:     () => import('../authentications/providers/basic/Basic'),
+        oidc:      () => import('../authentications/providers/oidc/Oidc'),
+    },
+    watcher: {
+        docker: () => import('../watchers/providers/docker/Docker'),
+    },
+    trigger: {
+        apprise:       () => import('../triggers/providers/apprise/Apprise'),
+        command:       () => import('../triggers/providers/command/Command'),
+        discord:       () => import('../triggers/providers/discord/Discord'),
+        docker:        () => import('../triggers/providers/docker/Docker'),
+        dockercompose: () => import('../triggers/providers/dockercompose/Dockercompose'),
+        gotify:        () => import('../triggers/providers/gotify/Gotify'),
+        http:          () => import('../triggers/providers/http/Http'),
+        ifttt:         () => import('../triggers/providers/ifttt/Ifttt'),
+        kafka:         () => import('../triggers/providers/kafka/Kafka'),
+        mock:          () => import('../triggers/providers/mock/Mock'),
+        mqtt:          () => import('../triggers/providers/mqtt/Hass'),
+        ntfy:          () => import('../triggers/providers/ntfy/Ntfy'),
+        pushover:      () => import('../triggers/providers/pushover/Pushover'),
+        rocketchat:    () => import('../triggers/providers/rocketchat/Rocketchat'),
+        slack:         () => import('../triggers/providers/slack/Slack'),
+        smtp:          () => import('../triggers/providers/smtp/Smtp'),
+        telegram:      () => import('../triggers/providers/telegram/Telegram'),
+    },
+    registry: {
+        acr:       () => import('../registries/providers/acr/Acr'),
+        codeberg:  () => import('../registries/providers/codeberg/Codeberg'),
+        custom:    () => import('../registries/providers/custom/Custom'),
+        ecr:       () => import('../registries/providers/ecr/Ecr'),
+        forgejo:   () => import('../registries/providers/forgejo/Forgejo'),
+        gcr:       () => import('../registries/providers/gcr/Gcr'),
+        ghcr:      () => import('../registries/providers/ghcr/Ghcr'),
+        gitea:     () => import('../registries/providers/gitea/Gitea'),
+        gitlab:    () => import('../registries/providers/gitlab/Gitlab'),
+        hub:       () => import('../registries/providers/hub/Hub'),
+        lscr:      () => import('../registries/providers/lscr/Lscr'),
+        quay:      () => import('../registries/providers/quay/Quay'),
+        trueforge: () => import('../registries/providers/trueforge/Trueforge'),
+    },
+};
 
 export interface RegistryState {
     trigger: { [key: string]: Trigger };
@@ -43,23 +86,11 @@ export function getState() {
 
 /**
  * Get available providers for a given component kind.
- * @param {string} basePath relative path to the providers directory
+ * @param {string} kind component kind
  * @returns {string[]} sorted list of available provider names
  */
-function getAvailableProviders(basePath: string) {
-    try {
-        const resolvedPath = path.resolve(__dirname, basePath);
-        const providers = fs
-            .readdirSync(resolvedPath)
-            .filter((file) => {
-                const filePath = path.join(resolvedPath, file);
-                return fs.statSync(filePath).isDirectory();
-            })
-            .sort();
-        return providers;
-    } catch (e) {
-        return [];
-    }
+function getAvailableProviders(kind: ComponentKind) {
+    return Object.keys(PROVIDERS[kind] || {}).sort();
 }
 
 /**
@@ -124,20 +155,28 @@ function getHelpfulErrorMessage(
  * @param {*} provider
  * @param {*} name
  * @param {*} configuration
- * @param {*} componentPath
  */
 async function registerComponent(
     kind: ComponentKind,
     provider: string,
     name: string,
     configuration: ComponentConfiguration,
-    componentPath: string,
 ): Promise<Component> {
     const providerLowercase = provider.toLowerCase();
     const nameLowercase = name.toLowerCase();
-    const componentFile = `${componentPath}/${providerLowercase.toLowerCase()}/${capitalize(provider)}`;
+    const loader = PROVIDERS[kind]?.[providerLowercase];
+    if (!loader) {
+        const available = getAvailableProviders(kind);
+        const helpfulMessage = getHelpfulErrorMessage(
+            kind,
+            providerLowercase,
+            'Cannot find module',
+            available,
+        );
+        throw new Error(helpfulMessage);
+    }
     try {
-        const ComponentClass = (await import(componentFile)).default;
+        const ComponentClass = (await loader()).default;
         const component: Component = new ComponentClass();
         const componentRegistered = await component.register(
             kind,
@@ -145,20 +184,12 @@ async function registerComponent(
             nameLowercase,
             configuration,
         );
-
-        // Type assertion is safe here because we know the kind matches the expected type
-        // if the file structure and inheritance are correct
         (state[kind] as any)[component.getId()] = component;
         return componentRegistered;
     } catch (e: any) {
-        const availableProviders = getAvailableProviders(componentPath);
-        const helpfulMessage = getHelpfulErrorMessage(
-            kind,
-            providerLowercase,
-            e.message,
-            availableProviders,
+        throw new Error(
+            `Error when registering component ${providerLowercase} (${e.message})`,
         );
-        throw new Error(helpfulMessage);
     }
 }
 
@@ -166,13 +197,11 @@ async function registerComponent(
  * Register all found components.
  * @param kind
  * @param configurations
- * @param path
  * @returns {*[]}
  */
 async function registerComponents(
     kind: ComponentKind,
     configurations: Record<string, any>,
-    path: string,
 ) {
     if (configurations) {
         const providers = Object.keys(configurations);
@@ -189,7 +218,6 @@ async function registerComponents(
                             provider,
                             configurationName,
                             providerConfigurations[configurationName],
-                            path,
                         ),
                 );
             })
@@ -217,7 +245,6 @@ async function registerWatchers() {
                     'docker',
                     'local',
                     {},
-                    '../watchers/providers',
                 ),
             );
         } else {
@@ -229,7 +256,6 @@ async function registerWatchers() {
                         'docker',
                         watcherKeyNormalize,
                         configurations[watcherKeyNormalize],
-                        '../watchers/providers',
                     );
                 }),
             );
@@ -250,7 +276,6 @@ async function registerTriggers() {
         await registerComponents(
             'trigger',
             configurations,
-            '../triggers/providers',
         );
     } catch (e: any) {
         log.warn(`Some triggers failed to register (${e.message})`);
@@ -281,7 +306,6 @@ async function registerRegistries() {
         await registerComponents(
             'registry',
             registriesToRegister,
-            '../registries/providers',
         );
     } catch (e: any) {
         log.warn(`Some registries failed to register (${e.message})`);
@@ -302,13 +326,11 @@ async function registerAuthentications() {
                 'anonymous',
                 'anonymous',
                 {},
-                '../authentications/providers',
             );
         }
         await registerComponents(
             'authentication',
             configurations,
-            '../authentications/providers',
         );
     } catch (e: any) {
         log.warn(`Some authentications failed to register (${e.message})`);
