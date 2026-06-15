@@ -9,7 +9,7 @@ import getmac from 'getmac';
 import * as store from '../store';
 import * as registry from '../registry';
 import log from '../log';
-import { getVersion, getServerConfiguration } from '../configuration';
+import { getVersion } from '../configuration';
 
 const router = express.Router();
 
@@ -148,7 +148,6 @@ export function init(app) {
             cookie: {
                 httpOnly: true,
                 maxAge: getCookieMaxAge(7),
-                path: getServerConfiguration().basepath,
             },
         }),
     );
