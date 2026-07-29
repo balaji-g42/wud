@@ -22,7 +22,7 @@ function doesContainerBelongToCompose(compose, container) {
     );
     return Object.keys(compose.services).some((key) => {
         const service = compose.services[key];
-        return service.image.includes(currentImage);
+        return Boolean(service.image) && service.image.includes(currentImage);
     });
 }
 
@@ -69,7 +69,7 @@ class Dockercompose extends Docker {
      * @returns {string|null}
      */
     getComposeFileForContainer(container) {
-        // Check if container has a compose file label
+        // Check if container has a custom wud compose file label
         const composeFileLabel = this.configuration.composeFileLabel;
         if (container.labels && container.labels[composeFileLabel]) {
             const labelValue = container.labels[composeFileLabel];
@@ -77,6 +77,14 @@ class Dockercompose extends Docker {
             return path.isAbsolute(labelValue)
                 ? labelValue
                 : path.resolve(labelValue);
+        }
+
+        // Check if container has automatic compose file label
+        if (
+            container.labels &&
+            container.labels['com.docker.compose.project.config_files']
+        ) {
+            return container.labels['com.docker.compose.project.config_files'];
         }
 
         // Fall back to default configuration file
@@ -162,11 +170,20 @@ class Dockercompose extends Docker {
             return;
         }
 
+        // Track which services have already been mapped to avoid duplicates
+        // (multiple containers can share the same image/service)
+        const processedServices = new Set();
+
         // [{ current: '1.0.0', update: '2.0.0' }, {...}]
         const currentVersionToUpdateVersionArray = containersFiltered
-            .map((container) =>
-                this.mapCurrentVersionToUpdateVersion(compose, container),
-            )
+            .map((container) => {
+                const mapping = this.mapCurrentVersionToUpdateVersion(
+                    compose,
+                    container,
+                    processedServices,
+                );
+                return mapping;
+            })
             .filter((map) => map !== undefined);
 
         // Dry-run?
@@ -227,9 +244,10 @@ class Dockercompose extends Docker {
      * and the image declaration with the update version.
      * @param compose
      * @param container
+     * @param processedServices - Set to track which services have already been processed
      * @returns {{current, update}|undefined}
      */
-    mapCurrentVersionToUpdateVersion(compose, container) {
+    mapCurrentVersionToUpdateVersion(compose, container, processedServices) {
         // Get registry configuration
         this.log.debug(`Get ${container.image.registry.name} registry manager`);
         const registry = getState().registry[container.image.registry.name];
@@ -243,7 +261,10 @@ class Dockercompose extends Docker {
         const serviceKeyToUpdate = Object.keys(compose.services).find(
             (serviceKey) => {
                 const service = compose.services[serviceKey];
-                return service.image.includes(currentImage);
+                return (
+                    Boolean(service.image) &&
+                    service.image.includes(currentImage)
+                );
             },
         );
 
@@ -252,6 +273,19 @@ class Dockercompose extends Docker {
                 `Could not find service for container ${container.name} with image ${currentImage}`,
             );
             return undefined;
+        }
+
+        // Skip if this service has already been processed (duplicate container with same image)
+        if (processedServices && processedServices.has(serviceKeyToUpdate)) {
+            this.log.debug(
+                `Service ${serviceKeyToUpdate} already processed for container ${container.name} (duplicate image)`,
+            );
+            return undefined;
+        }
+
+        // Mark this service as processed
+        if (processedServices) {
+            processedServices.add(serviceKeyToUpdate);
         }
 
         // Rebuild image definition string
@@ -314,3 +348,4 @@ class Dockercompose extends Docker {
 }
 
 export default Dockercompose;
+export { doesContainerBelongToCompose };

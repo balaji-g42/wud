@@ -14,7 +14,7 @@ const HASS_DEVICE_NAME = 'wud';
 const HASS_MANUFACTURER = 'wud';
 const HASS_ENTITY_VALUE_TEMPLATE = '{{ value_json.image_tag_value }}';
 const HASS_LATEST_VERSION_TEMPLATE =
-    '{% if value_json.update_kind_kind == "digest" %}{{ value_json.result_digest[:15] }}{% else %}{{ value_json.result_tag }}{% endif %}';
+    '{% if value_json.update_kind_kind == "digest" %}{{ value_json.result_digest[:15] }}{% elif value_json.result_tag is defined %}{{ value_json.result_tag }}{% elif value_json.result_digest is defined %}{{ value_json.result_digest[:15] }}{% else %}{{ value_json.image_tag_value }}{% endif %}';
 
 /**
  * Get hass entity unique id.
@@ -55,10 +55,20 @@ function sanitizeIcon(icon) {
 }
 
 class Hass {
-    constructor({ client, configuration, log }) {
-        this.client = client;
+    constructor({ configuration, log }) {
         this.configuration = configuration;
         this.log = log;
+    }
+
+    /**
+     * Initialize the component.
+     *
+     * Set connection status sensor to online and subscribe to container and watcher events.
+     *
+     * @param client - MQTT client
+     */
+    async init(client) {
+        this.client = client;
 
         // Subscribe to container events to sync HA
         registerContainerAdded((container) =>
@@ -406,6 +416,66 @@ class Hass {
      */
     getDiscoveryTopic({ kind, topic }) {
         return `${this.configuration.hass.prefix}/${kind}/${getHassEntityId(topic)}/config`;
+    }
+
+    /**
+     * Get WUD state topic.
+     * @return {string} WUD state topic
+     */
+    getStateTopic() {
+        return `${this.configuration.topic}/status`;
+    }
+
+    /**
+     * Get will message.
+     *
+     * Allows MQTT broker to set WUD status to offline when WUD disconnects unexpectedly.
+     *
+     * @returns {Object} The will message object with topic, payload, and retain properties
+     */
+    getWill() {
+        return {
+            topic: this.getStateTopic(),
+            payload: 'offline',
+            retain: true,
+        };
+    }
+
+    /**
+     * Update the connection status sensor.
+     * @param connected - Whether WUD is currently connected to the MQTT broker
+     */
+    async updateConnectionStatusSensor(connected: boolean) {
+        const connectionStatusSensor = {
+            kind: 'binary_sensor',
+            topic: this.getStateTopic(),
+        };
+
+        const connectionStatusDiscoveryTopic = this.getDiscoveryTopic({
+            kind: connectionStatusSensor.kind,
+            topic: connectionStatusSensor.topic,
+        });
+
+        // Publish discovery message
+        if (this.configuration.hass.discovery) {
+            await this.publishDiscoveryMessage({
+                discoveryTopic: connectionStatusDiscoveryTopic,
+                stateTopic: connectionStatusSensor.topic,
+                kind: connectionStatusSensor.kind,
+                options: {
+                    device_class: 'connectivity',
+                    payload_on: 'online',
+                    payload_off: 'offline',
+                },
+                name: 'Connection status',
+            });
+        }
+
+        // Publish sensor
+        await this.updateSensor({
+            topic: connectionStatusSensor.topic,
+            value: connected ? 'online' : 'offline',
+        });
     }
 }
 

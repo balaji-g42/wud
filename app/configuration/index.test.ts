@@ -85,6 +85,7 @@ test('getStoreConfiguration should return configured store', async () => {
 test('getServerConfiguration should return configured api (new vars)', async () => {
     configuration.wudEnvVars.WUD_SERVER_PORT = '4000';
     expect(configuration.getServerConfiguration()).toStrictEqual({
+        basepath: '/',
         cors: {},
         enabled: true,
         feature: {

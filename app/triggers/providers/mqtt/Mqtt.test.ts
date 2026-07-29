@@ -57,9 +57,16 @@ const containerData = [
 
 beforeEach(async () => {
     jest.resetAllMocks();
-    mqtt.client = {
-        publish: jest.fn(() => {}),
+    const mockClient = {
+        on: jest.fn(),
+        publish: jest.fn(),
+        subscribe: jest.fn(),
+        unsubscribe: jest.fn(),
+        end: jest.fn(),
+        connect: jest.fn(),
     };
+    mqtt.client = mockClient;
+    mqttClient.connect = jest.fn(() => mockClient);
 });
 
 test('validateConfiguration should return validated configuration when valid', async () => {
@@ -120,13 +127,20 @@ test('initTrigger should init Mqtt client', async () => {
             prefix: 'homeassistant',
         },
     };
-    const spy = jest.spyOn(mqttClient, 'connectAsync');
+    const spy = jest.spyOn(mqttClient, 'connect');
     await mqtt.initTrigger();
     expect(spy).toHaveBeenCalledWith('mqtt://host:1883', {
         clientId: 'wud',
         username: 'user',
         password: 'password',
         rejectUnauthorized: true,
+        manualConnect: true,
+        reconnectPeriod: 10000,
+        will: {
+            topic: 'wud/container/status',
+            payload: 'offline',
+            retain: true,
+        },
     });
 });
 

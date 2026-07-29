@@ -2,6 +2,7 @@ import Component, { ComponentConfiguration } from '../../registry/Component';
 import * as event from '../../event';
 import { getTriggerCounter } from '../../prometheus/trigger';
 import { fullName, Container } from '../../model/container';
+import { AlternativesSchema, ObjectSchema } from 'joi';
 
 export interface TriggerConfiguration extends ComponentConfiguration {
     auto?: boolean;
@@ -11,6 +12,7 @@ export interface TriggerConfiguration extends ComponentConfiguration {
     simpletitle?: string;
     simplebody?: string;
     batchtitle?: string;
+    includebydefault?: boolean;
 }
 
 export interface ContainerReport {
@@ -192,7 +194,7 @@ class Trigger extends Component {
     }
 
     /**
-     * Inccrease the Prometheus trigger counter with the provided status.
+     * Increase the Prometheus trigger counter with the provided status.
      * @param status the trigger result status
      */
     increasePrometheusTriggerCounter(status: string) {
@@ -208,8 +210,6 @@ class Trigger extends Component {
 
     /**
      * Handle container reports (batch mode).
-     * @param containerReports
-     * @returns {Promise<void>}
      */
     async handleContainerReports(containerReports: ContainerReport[]) {
         // Filter on containers with update available and passing trigger threshold
@@ -269,7 +269,7 @@ class Trigger extends Component {
         triggerInclude: string | undefined,
     ) {
         if (!triggerInclude) {
-            return true;
+            return this.configuration.includebydefault !== false;
         }
         return this.isTriggerIncludedOrExcluded(
             containerResult,
@@ -292,8 +292,6 @@ class Trigger extends Component {
 
     /**
      * Return true if must trigger on this container.
-     * @param containerResult
-     * @returns {boolean}
      */
     mustTrigger(containerResult: Container) {
         const { triggerInclude, triggerExclude } = containerResult;
@@ -333,13 +331,11 @@ class Trigger extends Component {
 
     /**
      * Override method to merge with common Trigger options (threshold...).
-     * @param configuration
-     * @returns {*}
      */
     validateConfiguration(
         configuration: TriggerConfiguration,
     ): TriggerConfiguration {
-        const schema = this.getConfigurationSchema();
+        const schema = this.getConfigurationSchema() as ObjectSchema;
         const schemaWithDefaultOptions = schema.append({
             auto: this.joi.bool().default(true),
             threshold: this.joi
@@ -373,6 +369,7 @@ class Trigger extends Component {
             batchtitle: this.joi
                 .string()
                 .default('${containers.length} updates available'),
+            includebydefault: this.joi.boolean(),
         });
         const schemaValidated =
             schemaWithDefaultOptions.validate(configuration);
@@ -388,34 +385,28 @@ class Trigger extends Component {
     /**
      * Init Trigger. Can be overridden in trigger implementation class.
      */
-
-    initTrigger() {
+    async initTrigger() {
         // do nothing by default
     }
 
     /**
      * Trigger method. Must be overridden in trigger implementation class.
      */
-
-    trigger(containerWithResult: Container) {
+    async trigger(_containerWithResult: Container) {
         // do nothing by default
         this.log.warn(
             'Cannot trigger container result; this trigger does not implement "simple" mode',
         );
-        return containerWithResult;
     }
 
     /**
      * Trigger batch method. Must be overridden in trigger implementation class.
-     * @param containersWithResult
-     * @returns {*}
      */
-    triggerBatch(containersWithResult: Container[]) {
+    async triggerBatch(_containersWithResult: Container[]) {
         // do nothing by default
         this.log.warn(
             'Cannot trigger container results; this trigger does not implement "batch" mode',
         );
-        return containersWithResult;
     }
 
     /**

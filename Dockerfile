@@ -1,57 +1,52 @@
-# Common Stage
+# Common stage
 FROM node:24-alpine AS base
+WORKDIR /home/node/app
+
+# Install runtime packages used by release stage
+RUN apk add --no-cache tzdata openssl curl bash
+
+# App build stage
+FROM base AS app-build
+WORKDIR /home/node/app
+COPY app/package*.json ./
+RUN npm ci --include=dev --omit=optional --no-audit --no-fund --no-update-notifier
+COPY app/ ./
+RUN npm run build
+RUN npm prune --omit=dev
+
+# UI build stage
+FROM base AS ui-build
+WORKDIR /home/node/ui
+COPY ui/package*.json ./
+RUN npm ci --include=dev --omit=optional --no-audit --no-fund --no-update-notifier
+COPY ui/ ./
+RUN npm run build
+
+# Release stage
+FROM node:24-alpine AS release
+WORKDIR /home/node/app
 
 LABEL maintainer="fmartinou"
 EXPOSE 3000
-
 ARG WUD_VERSION=unknown
-
 ENV WORKDIR=/home/node/app
 ENV WUD_LOG_FORMAT=text
 ENV WUD_VERSION=$WUD_VERSION
 
 HEALTHCHECK --interval=30s --timeout=5s CMD if [[ -z ${WUD_SERVER_ENABLED} || ${WUD_SERVER_ENABLED} == 'true' ]]; then curl --fail http://localhost:${WUD_SERVER_PORT:-3000}/health || exit 1; else exit 0; fi;
 
-WORKDIR /home/node/app
+RUN apk add --no-cache tzdata openssl curl bash
 
-RUN mkdir /store
-
-# Add useful stuff
-RUN apk add --no-cache tzdata openssl curl git jq bash
-
-# Dependencies stage (Build)
-FROM base AS build
-
-# Copy app package.json
-COPY app/package* ./
-
-# Install dependencies (including dev)
-RUN npm ci --include=dev --omit=optional --no-audit --no-fund --no-update-notifier
-
-# Copy app source
-COPY app/ ./
-
-# Build
-RUN npm run build
-
-# Remove dev dependencies
-RUN npm prune --omit=dev
-
-# Release stage
-FROM base AS release
-
-# Default entrypoint
 COPY Docker.entrypoint.sh /usr/bin/entrypoint.sh
 RUN chmod +x /usr/bin/entrypoint.sh
+
+# Copy app runtime artifacts
+COPY --from=app-build /home/node/app/node_modules ./node_modules
+COPY --from=app-build /home/node/app/dist ./dist
+COPY --from=app-build /home/node/app/package.json ./package.json
+
+# Copy UI build output
+COPY --from=ui-build /home/node/ui/dist ./ui
+
 ENTRYPOINT ["/usr/bin/entrypoint.sh"]
-CMD ["node", "dist/index.js"]
-
-## Copy node_modules
-COPY --from=build /home/node/app/node_modules ./node_modules
-
-# Copy app (dist)
-COPY --from=build /home/node/app/dist ./dist
-COPY --from=build /home/node/app/package.json ./package.json
-
-# Copy ui
-COPY ui/dist/ ./ui
+CMD ["node", "dist/index"]
